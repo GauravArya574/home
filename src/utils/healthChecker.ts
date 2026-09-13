@@ -1,9 +1,9 @@
 import { DockerService, ServiceStatus } from '../types';
 
 /**
- * Direct browser probe for standalone static hosting environments (e.g. Cloudflare Pages, Netlify, Vercel Static, S3).
- * Uses fetch with no-cors mode, falling back to favicon / image DOM probing.
- * In no-cors mode, a response (even opaque type 0) confirms network connectivity and active server socket.
+ * Direct browser probe for client-side fallback.
+ * Uses fetch with standard / no-cors mode, followed strictly by an Image element check.
+ * Crucial fix: An error or rejection on fetch or image loading must NEVER be marked as "online" / "reachable".
  */
 async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): Promise<{
   online: boolean;
@@ -16,20 +16,21 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // Attempt standard fetch with no-cors to handle cross-origin services gracefully
-    await fetch(targetUrl, {
-      method: 'GET',
-      mode: 'no-cors',
+    // Attempt standard fetch with cors first to read real HTTP status if headers allow
+    const res = await fetch(targetUrl, {
+      method: 'HEAD',
       cache: 'no-cache',
       credentials: 'omit',
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
     const latency = Math.round(performance.now() - startTime);
+    const isOnline = res.status >= 200 && res.status < 400;
     return {
-      online: true,
+      online: isOnline,
       latency,
-      message: 'Reachable',
+      statusCode: res.status,
+      message: isOnline ? `HTTP ${res.status}` : `HTTP ${res.status} Error`,
     };
   } catch (err: unknown) {
     clearTimeout(timeoutId);
@@ -42,7 +43,9 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
       };
     }
 
-    // Secondary fallback: DOM element probe (favicons/images often bypass strict fetch restrictions)
+    // Secondary test: Try loading an image asset (like favicon.ico or logo).
+    // ONLY successful image load (onload) indicates the service is truly alive.
+    // onerror or timeout means offline / unreachable.
     return new Promise((resolve) => {
       const imgStartTime = performance.now();
       const img = new Image();
@@ -62,8 +65,8 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
       };
 
       const fallbackTimer = setTimeout(() => {
-        finish(false, 'Unreachable');
-      }, 2500);
+        finish(false, 'Unreachable / Timeout');
+      }, 3000);
 
       img.onload = () => {
         clearTimeout(fallbackTimer);
@@ -72,16 +75,10 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
 
       img.onerror = () => {
         clearTimeout(fallbackTimer);
-        // An onerror on an image loaded from an HTTP server still indicates the host is reachable and responding with a socket/HTTP status (e.g. 404/403/HTML)
-        const elapsed = performance.now() - imgStartTime;
-        if (elapsed < 2000) {
-          finish(true, 'Reachable');
-        } else {
-          finish(false, 'Unreachable');
-        }
+        // CRITICAL FIX: An error loading an asset must NOT be assumed online.
+        finish(false, 'Unreachable');
       };
 
-      // Try appending /favicon.ico or ping with timestamp
       try {
         const parsed = new URL(targetUrl);
         parsed.pathname = '/favicon.ico';
@@ -137,7 +134,7 @@ export async function pingService(
       const isOnline = Boolean(data.online && (!data.statusCode || (data.statusCode >= 200 && data.statusCode < 400)));
 
       // If ping proxy (e.g. Cloudflare Pages Function) cannot reach a private LAN IP from edge,
-      // attempt direct browser probe in case user is on the local network
+      // attempt direct browser probe only if the target is a private LAN IP
       if (!isOnline && data.isPrivateIp) {
         const directResult = await probeDirectBrowser(targetUrl);
         if (directResult.online) {
@@ -149,6 +146,14 @@ export async function pingService(
             message: 'Online (Direct LAN)',
           };
         }
+        return {
+          serviceId: service.id,
+          state: 'offline',
+          statusCode: data.statusCode,
+          latencyMs: latency,
+          lastChecked: Date.now(),
+          message: directResult.message || 'LAN Unreachable',
+        };
       }
 
       return {
