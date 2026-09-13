@@ -303,6 +303,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           </div>
 
+          {/* Health Ping Proxy Endpoint */}
+          <div className="space-y-2 pt-2">
+            <label className="block text-xs font-semibold uppercase text-slate-400">
+              Health Check Proxy Endpoint
+            </label>
+            <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2">
+              <input
+                type="text"
+                value={settings.customPingProxyUrl || ''}
+                onChange={(e) => onUpdateSettings({ customPingProxyUrl: e.target.value })}
+                placeholder="/api/ping (Default: Built-in Cloudflare Worker / Pages Function)"
+                className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none font-mono"
+              />
+              <p className="text-[11px] text-slate-400">
+                Leave empty for default <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">/api/ping</code>. If hosting on a static CDN without Cloudflare Pages Functions, you can paste the URL of a standalone Cloudflare Worker here (e.g. <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">https://ping-proxy.workers.dev/api/ping</code>).
+              </p>
+            </div>
+          </div>
+
           {/* Navigation & Link Behavior */}
           <div className="space-y-3 pt-2">
             <label className="block text-xs font-semibold uppercase text-slate-400">

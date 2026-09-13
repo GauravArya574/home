@@ -249,14 +249,14 @@ export default function App() {
         },
       }));
 
-      const status = await pingService(service);
+      const status = await pingService(service, settings.customPingProxyUrl);
 
       setServiceStatuses((prev) => ({
         ...prev,
         [service.id]: status,
       }));
     },
-    []
+    [settings.customPingProxyUrl]
   );
 
   // Refresh All Services Health simultaneously
@@ -266,7 +266,7 @@ export default function App() {
 
     await Promise.all(
       services.map(async (svc) => {
-        const status = await pingService(svc);
+        const status = await pingService(svc, settings.customPingProxyUrl);
         setServiceStatuses((prev) => ({
           ...prev,
           [svc.id]: status,
@@ -275,7 +275,7 @@ export default function App() {
     );
 
     setIsRefreshing(false);
-  }, [isRefreshing, services]);
+  }, [isRefreshing, services, settings.customPingProxyUrl]);
 
   // Run probe once services are fetched or network mode changes
   useEffect(() => {

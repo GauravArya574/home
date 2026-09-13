@@ -100,7 +100,7 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
  */
 export async function pingService(
   service: DockerService,
-  _activeUrl?: string
+  customProxyUrl?: string
 ): Promise<ServiceStatus> {
   // Strictly use the remote/WAN URL of the service
   const targetUrl = service.remoteUrl?.trim();
@@ -121,18 +121,21 @@ export async function pingService(
 
   try {
     // 1. First attempt the backend/edge proxy via GET query parameter.
-    // GET prevents 405 Method Not Allowed errors from static CDN servers and Cloudflare Pages asset routers.
-    const pingEndpoint = `/api/ping?url=${encodeURIComponent(targetUrl)}&timeout=5500`;
+    // Base proxy URL can be custom (e.g. https://my-worker.workers.dev/api/ping) or default (/api/ping)
+    const baseUrl = (customProxyUrl && customProxyUrl.trim()) ? customProxyUrl.trim().replace(/\/$/, '') : '/api/ping';
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const pingEndpoint = `${baseUrl}${separator}url=${encodeURIComponent(targetUrl)}&timeout=5500`;
+
     let res = await fetch(pingEndpoint, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
       signal: controller.signal,
     });
 
-    // If GET gave 404 or 405, attempt POST as a fallback
+    // If GET gave 405 or 404, attempt POST as a fallback
     if (res.status === 405 || res.status === 404) {
       try {
-        const postRes = await fetch('/api/ping', {
+        const postRes = await fetch(baseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
           body: JSON.stringify({ url: targetUrl, timeout: 5500 }),
