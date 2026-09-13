@@ -92,15 +92,17 @@ async function probeDirectBrowser(targetUrl: string, timeoutMs: number = 4000): 
 }
 
 /**
- * Pings the remote URL of the service.
- * Supports both full-stack setups (via backend proxy `/api/ping`) and static deployment environments (e.g. Cloudflare Pages).
+ * Pings the remote URL of the service to determine if it is online or offline.
+ * Only the remote URL (wanUrl/remoteUrl) is probed.
+ * If the URL returns any error code (e.g. 404, 502, 504, 521, etc.) or connection fails,
+ * the service is strictly marked as offline.
  */
 export async function pingService(
   service: DockerService,
   _activeUrl?: string
 ): Promise<ServiceStatus> {
-  // Only use the external (remote) URL as configured
-  const targetUrl = service.remoteUrl?.trim() || service.localUrl?.trim();
+  // Strictly use the remote/WAN URL of the service
+  const targetUrl = service.remoteUrl?.trim();
 
   if (!targetUrl) {
     return {
@@ -108,7 +110,7 @@ export async function pingService(
       state: 'offline',
       latencyMs: 0,
       lastChecked: Date.now(),
-      message: 'No URL configured',
+      message: 'No remote URL configured',
     };
   }
 
@@ -117,7 +119,7 @@ export async function pingService(
   const timeoutId = setTimeout(() => controller.abort(), 6000);
 
   try {
-    // 1. First attempt the backend proxy if available (Full-stack mode)
+    // 1. First attempt the backend/edge proxy (/api/ping)
     const res = await fetch('/api/ping', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,63 +133,67 @@ export async function pingService(
     if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       const latency = data.latency || Math.round(performance.now() - startTime);
-      const isOnline = Boolean(data.online && (!data.statusCode || (data.statusCode >= 200 && data.statusCode < 400)));
+      const statusCode = data.statusCode;
+      
+      // STRICT REQUIREMENT: Only HTTP 2xx and 3xx are online.
+      // Any error code (404, 500, 502, 504, 521, 522, etc.) is strictly OFFLINE.
+      const isOnline = Boolean(
+        data.online &&
+        typeof statusCode === 'number' &&
+        statusCode >= 200 &&
+        statusCode < 400
+      );
 
-      // If ping proxy (e.g. Cloudflare Pages Function) cannot reach a private LAN IP from edge,
-      // attempt direct browser probe only if the target is a private LAN IP
-      if (!isOnline && data.isPrivateIp) {
-        const directResult = await probeDirectBrowser(targetUrl);
-        if (directResult.online) {
-          return {
-            serviceId: service.id,
-            state: directResult.latency > 5000 ? 'degraded' : 'online',
-            latencyMs: directResult.latency,
-            lastChecked: Date.now(),
-            message: 'Online (Direct LAN)',
-          };
-        }
+      if (isOnline) {
         return {
           serviceId: service.id,
-          state: 'offline',
-          statusCode: data.statusCode,
+          state: latency > 5000 ? 'degraded' : 'online',
+          statusCode,
           latencyMs: latency,
           lastChecked: Date.now(),
-          message: directResult.message || 'LAN Unreachable',
+          message: `HTTP ${statusCode} OK`,
         };
       }
 
+      // Any HTTP error code or failure -> mark strictly OFFLINE
       return {
         serviceId: service.id,
-        state: isOnline ? (latency > 5000 ? 'degraded' : 'online') : 'offline',
-        statusCode: data.statusCode,
+        state: 'offline',
+        statusCode,
         latencyMs: latency,
         lastChecked: Date.now(),
-        message: isOnline ? (data.statusCode ? `HTTP ${data.statusCode} OK` : 'Online') : (data.error || `HTTP Error ${data.statusCode || 'Failed'}`),
+        message: statusCode ? `HTTP ${statusCode} Error` : (data.error || 'Offline'),
       };
     }
 
-    // If server returned non-JSON (e.g. static hosting returning HTML or 404/502),
-    // fallback to direct client-side browser probe
+    // If server returned non-JSON (e.g. static hosting returning HTML or 404/502 on /api/ping),
+    // fallback to direct browser probe of the remote URL
     const directResult = await probeDirectBrowser(targetUrl);
     return {
       serviceId: service.id,
       state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+      statusCode: directResult.statusCode,
       latencyMs: directResult.latency,
       lastChecked: Date.now(),
-      message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
+      message: directResult.online
+        ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online')
+        : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline')),
     };
   } catch (err: unknown) {
     clearTimeout(timeoutId);
     
-    // If the fetch to /api/ping completely fails (e.g. static CDN host or network error), fallback directly to client-side probe
+    // If /api/ping network fails, fallback to direct browser probe of remote URL
     try {
       const directResult = await probeDirectBrowser(targetUrl);
       return {
         serviceId: service.id,
         state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+        statusCode: directResult.statusCode,
         latencyMs: directResult.latency,
         lastChecked: Date.now(),
-        message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
+        message: directResult.online
+          ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online')
+          : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline')),
       };
     } catch {
       return {
