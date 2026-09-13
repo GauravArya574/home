@@ -120,13 +120,32 @@ export async function pingService(
   const timeoutId = setTimeout(() => controller.abort(), 6000);
 
   try {
-    // 1. First attempt the backend/edge proxy (/api/ping)
-    const res = await fetch('/api/ping', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: targetUrl, timeout: 5500 }),
+    // 1. First attempt the backend/edge proxy via GET query parameter.
+    // GET prevents 405 Method Not Allowed errors from static CDN servers and Cloudflare Pages asset routers.
+    const pingEndpoint = `/api/ping?url=${encodeURIComponent(targetUrl)}&timeout=5500`;
+    let res = await fetch(pingEndpoint, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
       signal: controller.signal,
     });
+
+    // If GET gave 404 or 405, attempt POST as a fallback
+    if (res.status === 405 || res.status === 404) {
+      try {
+        const postRes = await fetch('/api/ping', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ url: targetUrl, timeout: 5500 }),
+          signal: controller.signal,
+        });
+        if (postRes.ok) {
+          res = postRes;
+        }
+      } catch {
+        // keep original res
+      }
+    }
+
     clearTimeout(timeoutId);
 
     const contentType = res.headers.get('content-type') || '';

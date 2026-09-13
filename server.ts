@@ -45,8 +45,10 @@ const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50, timeout: 600
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, timeout: 6000, rejectUnauthorized: false });
 
 // Service Ping Proxy endpoint: tests remote HTTP/HTTPS service with timeout > 5000ms
-app.post("/api/ping", async (req, res) => {
-  const { url, timeout = 5500 } = req.body;
+const handleServerPing = async (req: express.Request, res: express.Response) => {
+  const url = (req.method === "GET" ? req.query.url : req.body?.url) as string;
+  const rawTimeout = req.method === "GET" ? req.query.timeout : req.body?.timeout;
+  const timeout = rawTimeout ? parseInt(String(rawTimeout), 10) : 5500;
 
   if (!url || typeof url !== "string") {
     return res.status(400).json({ error: "Missing or invalid 'url' parameter" });
@@ -171,7 +173,10 @@ app.post("/api/ping", async (req, res) => {
       timestamp: Date.now(),
     });
   }
-});
+};
+
+app.post("/api/ping", handleServerPing);
+app.get("/api/ping", handleServerPing);
 
 // Mock / Live Docker Host Metrics
 app.get("/api/docker-metrics", (_req, res) => {

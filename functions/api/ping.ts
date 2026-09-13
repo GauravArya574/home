@@ -16,22 +16,8 @@ export async function onRequestOptions(): Promise<Response> {
   });
 }
 
-export async function onRequestPost(context: { request: Request }): Promise<Response> {
-  const { request } = context;
-
-  let body: PingRequestBody;
-  try {
-    body = (await request.json()) as PingRequestBody;
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-    });
-  }
-
-  const { url, timeout = 5500 } = body || {};
-
-  if (!url || typeof url !== "string") {
+async function handlePing(targetUrl: string, timeoutMs: number = 5500): Promise<Response> {
+  if (!targetUrl || typeof targetUrl !== "string") {
     return new Response(JSON.stringify({ error: "Missing or invalid 'url' parameter" }), {
       status: 400,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
@@ -40,7 +26,7 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
 
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(url);
+    parsedUrl = new URL(targetUrl);
   } catch {
     return new Response(JSON.stringify({ error: "Invalid URL provided" }), {
       status: 400,
@@ -58,7 +44,7 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
         online: false,
         isPrivateIp: true,
         error: "Private LAN IP cannot be reached from Cloudflare edge. Fallback to direct client ping.",
-        url,
+        url: targetUrl,
         timestamp: Date.now(),
       }),
       {
@@ -70,10 +56,10 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
 
   const startTime = Date.now();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const probeRes = await fetch(url, {
+    const probeRes = await fetch(targetUrl, {
       method: "GET",
       headers: {
         "User-Agent":
@@ -103,7 +89,7 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
         online: isOnline,
         statusCode,
         latency,
-        url,
+        url: targetUrl,
         platform: "cloudflare-pages",
         error: isOnline ? undefined : `HTTP Error ${statusCode}`,
         timestamp: Date.now(),
@@ -117,15 +103,15 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
     clearTimeout(timeoutId);
     const latency = Date.now() - startTime;
     const errorObj = err as { name?: string; message?: string };
-    const isTimeout = errorObj?.name === "AbortError" || latency >= timeout;
+    const isTimeout = errorObj?.name === "AbortError" || latency >= timeoutMs;
 
     return new Response(
       JSON.stringify({
         online: false,
         platform: "cloudflare-pages",
         error: isTimeout ? "Connection timed out" : (errorObj?.message || "Unreachable"),
-        latency: isTimeout ? timeout : latency,
-        url,
+        latency: isTimeout ? timeoutMs : latency,
+        url: targetUrl,
         timestamp: Date.now(),
       }),
       {
@@ -136,11 +122,30 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
   }
 }
 
+export async function onRequestPost(context: { request: Request }): Promise<Response> {
+  const { request } = context;
+
+  let body: PingRequestBody;
+  try {
+    body = (await request.json()) as PingRequestBody;
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+      status: 400,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    });
+  }
+
+  const { url, timeout = 5500 } = body || {};
+  return handlePing(url || '', timeout);
+}
+
 // Support GET requests as well (e.g. /api/ping?url=https://...)
 export async function onRequestGet(context: { request: Request }): Promise<Response> {
   const { request } = context;
   const reqUrl = new URL(request.url);
   const targetUrl = reqUrl.searchParams.get("url");
+  const timeoutParam = reqUrl.searchParams.get("timeout");
+  const timeout = timeoutParam ? parseInt(timeoutParam, 10) : 5500;
 
   if (!targetUrl) {
     return new Response(JSON.stringify({ status: "ok", message: "Ping service endpoint ready" }), {
@@ -149,10 +154,5 @@ export async function onRequestGet(context: { request: Request }): Promise<Respo
     });
   }
 
-  const mockReq = new Request(request.url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: targetUrl }),
-  });
-  return onRequestPost({ request: mockReq });
+  return handlePing(targetUrl, isNaN(timeout) ? 5500 : timeout);
 }
