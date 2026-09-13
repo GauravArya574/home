@@ -1,4 +1,5 @@
 import { DockerService, ServiceStatus } from '../types';
+import { pingLogger } from './pingLogger';
 
 /**
  * Direct browser probe for client-side fallback.
@@ -144,14 +145,35 @@ export async function pingService(
         statusCode < 400
       );
 
+      const statusState = isOnline ? (latency > 5000 ? 'degraded' : 'online') : 'offline';
+      const statusMsg = isOnline
+        ? `HTTP ${statusCode} OK`
+        : (statusCode ? `HTTP ${statusCode} Error` : (data.error || 'Offline'));
+
+      pingLogger.log({
+        serviceId: service.id,
+        serviceName: service.name,
+        targetUrl,
+        method: data.platform === 'cloudflare-pages' ? 'cloudflare_function' : 'express_backend',
+        status: statusState,
+        statusCode,
+        latencyMs: latency,
+        message: statusMsg,
+        details: {
+          proxyStatus: res.status,
+          proxyResponseContentType: contentType,
+          rawResponse: data,
+        },
+      });
+
       if (isOnline) {
         return {
           serviceId: service.id,
-          state: latency > 5000 ? 'degraded' : 'online',
+          state: statusState,
           statusCode,
           latencyMs: latency,
           lastChecked: Date.now(),
-          message: `HTTP ${statusCode} OK`,
+          message: statusMsg,
         };
       }
 
@@ -162,22 +184,41 @@ export async function pingService(
         statusCode,
         latencyMs: latency,
         lastChecked: Date.now(),
-        message: statusCode ? `HTTP ${statusCode} Error` : (data.error || 'Offline'),
+        message: statusMsg,
       };
     }
 
     // If server returned non-JSON (e.g. static hosting returning HTML or 404/502 on /api/ping),
     // fallback to direct browser probe of the remote URL
     const directResult = await probeDirectBrowser(targetUrl);
+    const directState = directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline';
+    const directMsg = directResult.online
+      ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online (Direct Fetch)')
+      : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline (Direct Fetch)'));
+
+    pingLogger.log({
+      serviceId: service.id,
+      serviceName: service.name,
+      targetUrl,
+      method: 'direct_fetch',
+      status: directState,
+      statusCode: directResult.statusCode,
+      latencyMs: directResult.latency,
+      message: directMsg,
+      details: {
+        proxyStatus: res.status,
+        proxyResponseContentType: contentType,
+        errorMessage: `/api/ping returned non-JSON (${res.status} ${contentType}), fell back to direct browser fetch`,
+      },
+    });
+
     return {
       serviceId: service.id,
-      state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+      state: directState,
       statusCode: directResult.statusCode,
       latencyMs: directResult.latency,
       lastChecked: Date.now(),
-      message: directResult.online
-        ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online')
-        : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline')),
+      message: directMsg,
     };
   } catch (err: unknown) {
     clearTimeout(timeoutId);
@@ -185,21 +226,52 @@ export async function pingService(
     // If /api/ping network fails, fallback to direct browser probe of remote URL
     try {
       const directResult = await probeDirectBrowser(targetUrl);
+      const directState = directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline';
+      const directMsg = directResult.online
+        ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online (Direct Fetch)')
+        : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline (Direct Fetch)'));
+
+      pingLogger.log({
+        serviceId: service.id,
+        serviceName: service.name,
+        targetUrl,
+        method: 'direct_fetch',
+        status: directState,
+        statusCode: directResult.statusCode,
+        latencyMs: directResult.latency,
+        message: directMsg,
+        details: {
+          errorMessage: `/api/ping fetch threw error: ${(err as Error)?.message || String(err)}`,
+        },
+      });
+
       return {
         serviceId: service.id,
-        state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+        state: directState,
         statusCode: directResult.statusCode,
         latencyMs: directResult.latency,
         lastChecked: Date.now(),
-        message: directResult.online
-          ? (directResult.statusCode ? `HTTP ${directResult.statusCode} OK` : 'Online')
-          : (directResult.statusCode ? `HTTP ${directResult.statusCode} Error` : (directResult.message || 'Offline')),
+        message: directMsg,
       };
-    } catch {
+    } catch (fallbackErr) {
+      const latency = Math.round(performance.now() - startTime);
+      pingLogger.log({
+        serviceId: service.id,
+        serviceName: service.name,
+        targetUrl,
+        method: 'error',
+        status: 'offline',
+        latencyMs: latency,
+        message: 'Unreachable',
+        details: {
+          errorMessage: (fallbackErr as Error)?.message || String(fallbackErr),
+        },
+      });
+
       return {
         serviceId: service.id,
         state: 'offline',
-        latencyMs: Math.round(performance.now() - startTime),
+        latencyMs: latency,
         lastChecked: Date.now(),
         message: 'Unreachable',
       };

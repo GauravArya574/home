@@ -57,6 +57,7 @@ import { ServiceCard } from './components/ServiceCard';
 import { SortableServiceCard } from './components/SortableServiceCard';
 import { ServiceModal } from './components/ServiceModal';
 import { SettingsModal } from './components/SettingsModal';
+import { DiagnosticLogsModal } from './components/DiagnosticLogsModal';
 
 const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   mode: 'remote',
@@ -95,6 +96,7 @@ export default function App() {
   // 5. Modals & Reorder Mode
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isDiagnosticModalOpen, setIsDiagnosticModalOpen] = useState(false);
   const [serviceToEdit, setServiceToEdit] = useState<DockerService | null>(null);
   const [isReorderMode, setIsReorderMode] = useState(false);
 
@@ -424,6 +426,7 @@ export default function App() {
         <Navbar
           gatewayConfig={gatewayConfig}
           onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
+          onOpenDiagnosticModal={() => setIsDiagnosticModalOpen(true)}
           onRefreshAll={refreshAllStatuses}
           isRefreshing={isRefreshing}
           autoRefreshEnabled={autoRefreshEnabled}
@@ -619,6 +622,14 @@ export default function App() {
             services={services}
             onImportServices={handleImportServices}
             onResetDefaultServices={handleResetServices}
+          />
+        )}
+
+        {isDiagnosticModalOpen && (
+          <DiagnosticLogsModal
+            key="diagnostic-modal"
+            isOpen={isDiagnosticModalOpen}
+            onClose={() => setIsDiagnosticModalOpen(false)}
           />
         )}
       </AnimatePresence>

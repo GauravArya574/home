@@ -6,7 +6,8 @@ import {
   RefreshCw, 
   Settings as SettingsIcon, 
   Pause, 
-  Play
+  Play,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GatewayConfig, NetworkMode } from '../types';
@@ -14,6 +15,7 @@ import { GatewayConfig, NetworkMode } from '../types';
 interface NavbarProps {
   gatewayConfig: GatewayConfig;
   onOpenSettingsModal: () => void;
+  onOpenDiagnosticModal: () => void;
   onRefreshAll: () => void;
   isRefreshing: boolean;
   autoRefreshEnabled: boolean;
@@ -24,6 +26,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   gatewayConfig,
   onOpenSettingsModal,
+  onOpenDiagnosticModal,
   onRefreshAll,
   isRefreshing,
   autoRefreshEnabled,
@@ -133,6 +136,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               ) : (
                 <Play className="w-3.5 h-3.5 text-slate-400" />
               )}
+            </button>
+          </div>
+
+          {/* Diagnostic Logs & Inspector */}
+          <div className="flex items-center bg-slate-900/60 border border-slate-700/50 backdrop-blur-md rounded-2xl p-1">
+            <button
+              id="open-diagnostics-btn"
+              onClick={onOpenDiagnosticModal}
+              title="View Ping Diagnostics & Error Logs"
+              className="p-2 rounded-xl text-slate-400 hover:text-indigo-400 hover:bg-slate-800/70 transition-colors relative"
+            >
+              <Activity className="w-4 h-4 text-slate-400 hover:text-indigo-400" />
             </button>
           </div>
 

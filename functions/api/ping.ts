@@ -104,6 +104,7 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
         statusCode,
         latency,
         url,
+        platform: "cloudflare-pages",
         error: isOnline ? undefined : `HTTP Error ${statusCode}`,
         timestamp: Date.now(),
       }),
@@ -121,6 +122,7 @@ export async function onRequestPost(context: { request: Request }): Promise<Resp
     return new Response(
       JSON.stringify({
         online: false,
+        platform: "cloudflare-pages",
         error: isTimeout ? "Connection timed out" : (errorObj?.message || "Unreachable"),
         latency: isTimeout ? timeout : latency,
         url,
