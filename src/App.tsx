@@ -49,6 +49,7 @@ import {
   saveAppSettings,
   debouncedSaveAppSettings,
   flushAppSettingsSave,
+  APP_CONFIG_ROW_ID,
   DatabaseServiceRow,
   mapRowToService 
 } from './lib/services';
@@ -180,6 +181,33 @@ export default function App() {
           table: 'services',
         },
         (payload) => {
+          const targetRow = (payload.new || payload.old) as DatabaseServiceRow | undefined;
+          const isSystemConfig =
+            targetRow?.id === APP_CONFIG_ROW_ID ||
+            targetRow?.name === '__SYSTEM_SETTINGS__';
+
+          // Handle real-time sync of system settings / custom proxy URL across all browser tabs & devices
+          if (isSystemConfig) {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const row = payload.new as DatabaseServiceRow;
+              if (row.health_endpoint) {
+                try {
+                  const parsed = JSON.parse(row.health_endpoint);
+                  if (parsed.settings) {
+                    setSettings((prev) => ({ ...prev, ...parsed.settings }));
+                  }
+                  if (parsed.gatewayConfig) {
+                    setGatewayConfig((prev) => ({ ...prev, ...parsed.gatewayConfig }));
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
+            return;
+          }
+
+          // Handle normal Docker service card changes
           if (payload.eventType === 'INSERT') {
             const newSvc = mapRowToService(payload.new as DatabaseServiceRow);
             setServices((prev) => {
@@ -193,8 +221,29 @@ export default function App() {
             );
           } else if (payload.eventType === 'DELETE') {
             const deletedId = (payload.old as { id?: string })?.id;
-            if (deletedId) {
+            if (deletedId && deletedId !== APP_CONFIG_ROW_ID) {
               setServices((prev) => prev.filter((s) => s.id !== deletedId));
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'settings',
+        },
+        (payload) => {
+          if (payload.new) {
+            const data = payload.new as Record<string, unknown>;
+            const remoteSettings = (data.dashboard_settings || data.settings) as Partial<DashboardSettings> | undefined;
+            const remoteGateway = (data.gateway_config || data.gatewayConfig) as Partial<GatewayConfig> | undefined;
+            if (remoteSettings) {
+              setSettings((prev) => ({ ...prev, ...remoteSettings }));
+            }
+            if (remoteGateway) {
+              setGatewayConfig((prev) => ({ ...prev, ...remoteGateway }));
             }
           }
         }
@@ -277,12 +326,12 @@ export default function App() {
     setIsRefreshing(false);
   }, [isRefreshing, services, settings.customPingProxyUrl]);
 
-  // Run probe once services are fetched or network mode changes
+  // Run probe once services are fetched, network mode changes, or proxy URL updates
   useEffect(() => {
     if (services.length > 0) {
       refreshAllStatuses();
     }
-  }, [services.length, gatewayConfig.mode]);
+  }, [services.length, gatewayConfig.mode, settings.customPingProxyUrl]);
 
   // Auto-refresh interval
   useEffect(() => {
@@ -610,12 +659,15 @@ export default function App() {
           <SettingsModal
             key="settings-modal"
             isOpen={isSettingsModalOpen}
-            onClose={() => setIsSettingsModalOpen(false)}
+            onClose={() => {
+              flushAppSettingsSave();
+              setIsSettingsModalOpen(false);
+            }}
             settings={settings}
             onUpdateSettings={(newSettings) => {
               setSettings((prev) => {
                 const updated = { ...prev, ...newSettings };
-                debouncedSaveAppSettings({ settings: updated }, 400);
+                debouncedSaveAppSettings({ settings: updated, gatewayConfig }, 300);
                 return updated;
               });
             }}

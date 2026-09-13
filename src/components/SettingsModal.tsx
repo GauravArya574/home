@@ -13,10 +13,14 @@ import {
   Image as ImageIcon,
   Trash2,
   Link,
-  Sparkles
+  Sparkles,
+  Cloud,
+  Check,
+  AlertCircle
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DashboardSettings, DockerService } from '../types';
+import { flushAppSettingsSave } from '../lib/services';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -43,6 +47,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [importStatus, setImportStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [imageUrlInput, setImageUrlInput] = useState('');
   const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{ success: boolean; latency?: number; message: string } | null>(null);
+
+  const handleTestProxy = async () => {
+    setTestingProxy(true);
+    setProxyTestResult(null);
+
+    const baseUrl = (settings.customPingProxyUrl && settings.customPingProxyUrl.trim())
+      ? settings.customPingProxyUrl.trim().replace(/\/$/, '')
+      : '/api/ping';
+
+    // Target service or public fallback
+    const sampleTarget = services[0]?.remoteUrl || 'https://1.1.1.1';
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const testEndpoint = `${baseUrl}${separator}url=${encodeURIComponent(sampleTarget)}&timeout=5000`;
+
+    const startTime = Date.now();
+    try {
+      const res = await fetch(testEndpoint, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const elapsed = Date.now() - startTime;
+      const contentType = res.headers.get('content-type') || '';
+      
+      if (!contentType.includes('application/json')) {
+        setProxyTestResult({
+          success: false,
+          message: `Endpoint returned HTTP ${res.status} (${contentType.split(';')[0] || 'non-JSON'}). Expected JSON.`,
+        });
+        return;
+      }
+
+      const data = await res.json();
+      if (data.error && !('online' in data)) {
+        setProxyTestResult({
+          success: false,
+          message: `Proxy reported error: ${data.error}`,
+        });
+      } else {
+        setProxyTestResult({
+          success: true,
+          latency: typeof data.latency === 'number' ? data.latency : elapsed,
+          message: `Proxy operational! Tested against ${sampleTarget}`,
+        });
+      }
+    } catch (err) {
+      setProxyTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Network error reaching proxy endpoint',
+      });
+    } finally {
+      setTestingProxy(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -305,19 +364,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Health Ping Proxy Endpoint */}
           <div className="space-y-2 pt-2">
-            <label className="block text-xs font-semibold uppercase text-slate-400">
-              Health Check Proxy Endpoint
-            </label>
-            <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2">
-              <input
-                type="text"
-                value={settings.customPingProxyUrl || ''}
-                onChange={(e) => onUpdateSettings({ customPingProxyUrl: e.target.value })}
-                placeholder="/api/ping (Default: Built-in Cloudflare Worker / Pages Function)"
-                className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none font-mono"
-              />
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold uppercase text-slate-400">
+                Health Check Proxy Endpoint
+              </label>
+              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/60 font-medium">
+                <Cloud className="w-3 h-3" />
+                Supabase Synced
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2.5">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  type="text"
+                  value={settings.customPingProxyUrl || ''}
+                  onChange={(e) => onUpdateSettings({ customPingProxyUrl: e.target.value })}
+                  onBlur={() => flushAppSettingsSave()}
+                  placeholder="/api/ping (Default: Built-in Cloudflare Worker / Pages Function)"
+                  className="flex-1 px-3 py-2 text-xs bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleTestProxy}
+                  disabled={testingProxy}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-300 bg-indigo-950/70 border border-indigo-700/60 rounded-lg hover:bg-indigo-900/60 hover:text-white transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                >
+                  {testingProxy ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                      Testing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                      Test Proxy
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {proxyTestResult && (
+                <div
+                  className={`flex items-start gap-2 p-2.5 rounded-lg text-xs border ${
+                    proxyTestResult.success
+                      ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                      : 'bg-rose-950/40 border-rose-800/60 text-rose-300'
+                  }`}
+                >
+                  {proxyTestResult.success ? (
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      {proxyTestResult.success ? 'Connection Successful' : 'Connection Failed'}
+                      {typeof proxyTestResult.latency === 'number' && (
+                        <span className="font-mono text-[11px] opacity-80">
+                          ({proxyTestResult.latency}ms)
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] opacity-90 break-all mt-0.5">
+                      {proxyTestResult.message}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <p className="text-[11px] text-slate-400">
-                Leave empty for default <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">/api/ping</code>. If hosting on a static CDN without Cloudflare Pages Functions, you can paste the URL of a standalone Cloudflare Worker here (e.g. <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">https://ping-proxy.workers.dev/api/ping</code>).
+                This endpoint is synchronized to your <strong>Supabase</strong> database. Any change made here updates across all devices and tabs in real-time. Leave empty to use default <code className="text-indigo-300 bg-slate-800 px-1 py-0.5 rounded">/api/ping</code>.
               </p>
             </div>
           </div>

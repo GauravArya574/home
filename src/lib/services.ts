@@ -184,8 +184,16 @@ export async function batchUpsertServices(servicesList: DockerService[]): Promis
   return (data || []).map((row: DatabaseServiceRow) => mapRowToService(row));
 }
 
+export const APP_CONFIG_ROW_ID = 'app_global_settings';
+
+// In-memory cache of the latest fetched or saved configuration to avoid partial overwrites
+let cachedFullConfig: AppConfigPayload = {
+  gatewayConfig: undefined,
+  settings: undefined,
+};
+
 /**
- * Clears all services from Supabase.
+ * Clears all services from Supabase (protecting system configuration row).
  */
 export async function clearAllServices(): Promise<void> {
   if (!isSupabaseConfigured || !supabase) {
@@ -195,7 +203,8 @@ export async function clearAllServices(): Promise<void> {
   const { error } = await supabase
     .from('services')
     .delete()
-    .neq('id', '___non_existent_id___'); // Deletes all rows
+    .neq('id', APP_CONFIG_ROW_ID)
+    .neq('name', '__SYSTEM_SETTINGS__');
 
   if (error) {
     console.error('Error clearing services from Supabase:', error);
@@ -207,8 +216,6 @@ export interface AppConfigPayload {
   gatewayConfig?: Partial<GatewayConfig>;
   settings?: Partial<DashboardSettings>;
 }
-
-const APP_CONFIG_ROW_ID = 'app_global_settings';
 
 /**
  * Loads gateway and dashboard settings from Supabase.
@@ -229,10 +236,15 @@ export async function fetchAppSettings(): Promise<{
       .maybeSingle();
 
     if (!settingsError && settingsData) {
-      return {
+      const result = {
         gatewayConfig: settingsData.gateway_config || settingsData.gatewayConfig,
         settings: settingsData.dashboard_settings || settingsData.settings,
       };
+      cachedFullConfig = {
+        gatewayConfig: { ...cachedFullConfig.gatewayConfig, ...result.gatewayConfig },
+        settings: { ...cachedFullConfig.settings, ...result.settings },
+      };
+      return result;
     }
   } catch {
     // Dedicated settings table might not exist; try fallback record
@@ -249,6 +261,10 @@ export async function fetchAppSettings(): Promise<{
     if (!serviceError && serviceRow && serviceRow.health_endpoint) {
       try {
         const parsed = JSON.parse(serviceRow.health_endpoint);
+        cachedFullConfig = {
+          gatewayConfig: { ...cachedFullConfig.gatewayConfig, ...parsed.gatewayConfig },
+          settings: { ...cachedFullConfig.settings, ...parsed.settings },
+        };
         return parsed;
       } catch {
         // ignore
@@ -269,6 +285,23 @@ export async function saveAppSettings(
 ): Promise<void> {
   if (!isSupabaseConfigured || !supabase) return;
 
+  // Merge with cached config so partial saves never drop fields (like customPingProxyUrl)
+  cachedFullConfig = {
+    gatewayConfig: {
+      ...cachedFullConfig.gatewayConfig,
+      ...payload.gatewayConfig,
+    },
+    settings: {
+      ...cachedFullConfig.settings,
+      ...payload.settings,
+    },
+  };
+
+  const payloadToSave: AppConfigPayload = {
+    gatewayConfig: cachedFullConfig.gatewayConfig,
+    settings: cachedFullConfig.settings,
+  };
+
   const now = new Date().toISOString();
 
   // 1. Try saving to 'settings' table first
@@ -277,8 +310,8 @@ export async function saveAppSettings(
       .from('settings')
       .upsert({
         id: APP_CONFIG_ROW_ID,
-        gateway_config: payload.gatewayConfig,
-        dashboard_settings: payload.settings,
+        gateway_config: payloadToSave.gatewayConfig,
+        dashboard_settings: payloadToSave.settings,
         updated_at: now,
       }, { onConflict: 'id' });
 
@@ -295,7 +328,7 @@ export async function saveAppSettings(
       icon: 'Settings',
       local_url: 'http://localhost',
       remote_url: 'http://localhost',
-      health_endpoint: JSON.stringify(payload),
+      health_endpoint: JSON.stringify(payloadToSave),
       created_at: now,
       updated_at: now,
     };
