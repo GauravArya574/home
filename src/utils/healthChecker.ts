@@ -129,10 +129,27 @@ export async function pingService(
     });
     clearTimeout(timeoutId);
 
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       const latency = data.latency || Math.round(performance.now() - startTime);
       const isOnline = Boolean(data.online && (!data.statusCode || (data.statusCode >= 200 && data.statusCode < 400)));
+
+      // If ping proxy (e.g. Cloudflare Pages Function) cannot reach a private LAN IP from edge,
+      // attempt direct browser probe in case user is on the local network
+      if (!isOnline && data.isPrivateIp) {
+        const directResult = await probeDirectBrowser(targetUrl);
+        if (directResult.online) {
+          return {
+            serviceId: service.id,
+            state: directResult.latency > 5000 ? 'degraded' : 'online',
+            latencyMs: directResult.latency,
+            lastChecked: Date.now(),
+            message: 'Online (Direct LAN)',
+          };
+        }
+      }
 
       return {
         serviceId: service.id,
@@ -144,25 +161,15 @@ export async function pingService(
       };
     }
 
-    // If server returned 404 (static hosting without Express backend, e.g. Cloudflare Pages / Vercel static),
+    // If server returned non-JSON (e.g. static hosting returning HTML or 404/502),
     // fallback to direct client-side browser probe
-    if (res.status === 404 || res.status === 502) {
-      const directResult = await probeDirectBrowser(targetUrl);
-      return {
-        serviceId: service.id,
-        state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
-        latencyMs: directResult.latency,
-        lastChecked: Date.now(),
-        message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
-      };
-    }
-
+    const directResult = await probeDirectBrowser(targetUrl);
     return {
       serviceId: service.id,
-      state: 'offline',
-      latencyMs: Math.round(performance.now() - startTime),
+      state: directResult.online ? (directResult.latency > 5000 ? 'degraded' : 'online') : 'offline',
+      latencyMs: directResult.latency,
       lastChecked: Date.now(),
-      message: 'Proxy Error ' + res.status,
+      message: directResult.message || (directResult.online ? 'Online' : 'Offline'),
     };
   } catch (err: unknown) {
     clearTimeout(timeoutId);
